@@ -1,34 +1,24 @@
 const TelegramBot = require('node-telegram-bot-api');
 const { createClient } = require('@supabase/supabase-js');
 
-const TOKEN       = process.env.BOT_TOKEN;
-const APP_URL     = process.env.APP_URL;
-const OWNER_ID    = process.env.OWNER_TELEGRAM_ID;
+const TOKEN        = process.env.BOT_TOKEN;
+const APP_URL      = process.env.APP_URL;
+const OWNER_ID     = process.env.OWNER_TELEGRAM_ID;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
 const bot = new TelegramBot(TOKEN, {
-  polling: {
-    autoStart: true,
-    params: { timeout: 10 }
-  }
+  polling: { autoStart: true, params: { timeout: 10 } }
 });
+bot.on('polling_error', (err) => console.error('Polling error:', err.message));
+process.on('uncaughtException', (err) => console.error('Uncaught:', err));
 
-bot.on('polling_error', (err) => {
-  console.error('Polling error:', err.message);
-});
+const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught exception:', err);
-});
-const db  = createClient(SUPABASE_URL, SUPABASE_KEY);
-
-// ─── /start command ───────────────────────────────────────
+// ── /start ────────────────────────────────────
 bot.onText(/\/start/, (msg) => {
-  const chatId     = msg.chat.id;
-  const firstName  = msg.from.first_name;
-
-  bot.sendMessage(chatId, `👋 Hey ${firstName}! Tap the button below to open the shop.`, {
+  bot.sendMessage(msg.chat.id,
+    `👋 Hey ${msg.from.first_name}! Tap below to open the shop.`, {
     reply_markup: {
       inline_keyboard: [[
         { text: '🛍️ Open Shop', web_app: { url: APP_URL } }
@@ -37,114 +27,95 @@ bot.onText(/\/start/, (msg) => {
   });
 });
 
-// ─── /orders command (you only) ───────────────────────────
+// ── /orders ───────────────────────────────────
 bot.onText(/\/orders/, async (msg) => {
+  console.log('orders from:', msg.chat.id, 'owner:', OWNER_ID);
   if (String(msg.chat.id) !== String(OWNER_ID)) return;
-
-  const { data, error } = await db
-    .from('orders')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(10);
-
-  if (error || !data?.length) {
-    bot.sendMessage(msg.chat.id, '📭 No orders yet.');
-    return;
-  }
-
-  const text = data.map((o, i) => {
-    const date = new Date(o.created_at).toLocaleString();
-    return `#${i + 1} — ${o.product_name}
-💰 $${o.price_usd} in ${o.crypto}
-👤 @${o.telegram_username || 'unknown'}
-📝 ${o.customer_note || 'No note'}
-🔖 Status: ${o.status}
-📅 ${date}`;
-  }).join('\n\n');
-
-  bot.sendMessage(msg.chat.id, `🧾 *Last 10 Orders:*\n\n${text}`, {
-    parse_mode: 'Markdown'
-  });
+  const { data, error } = await db.from('orders')
+    .select('*').order('created_at', { ascending: false }).limit(10);
+  if (error || !data?.length) { bot.sendMessage(msg.chat.id, '📭 No orders yet.'); return; }
+  const text = data.map((o, i) =>
+    `#${i+1} — ${o.product_name}\n💰 $${o.price_usd} | 👤 @${o.telegram_username||'unknown'}\n🔖 ${o.status} | 📅 ${new Date(o.created_at).toLocaleString()}`
+  ).join('\n\n');
+  bot.sendMessage(msg.chat.id, `🧾 *Last 10 Orders:*\n\n${text}`, { parse_mode: 'Markdown' });
 });
 
-// ─── /pending command (you only) ──────────────────────────
+// ── /pending ──────────────────────────────────
 bot.onText(/\/pending/, async (msg) => {
   if (String(msg.chat.id) !== String(OWNER_ID)) return;
-
-  const { data, error } = await db
-    .from('orders')
-    .select('*')
-    .eq('status', 'pending')
-    .order('created_at', { ascending: false });
-
-  if (error || !data?.length) {
-    bot.sendMessage(msg.chat.id, '✅ No pending orders!');
-    return;
-  }
-
-  const text = data.map((o, i) => {
-    const date = new Date(o.created_at).toLocaleString();
-    return `#${i + 1} — ${o.product_name}
-💰 $${o.price_usd} in ${o.crypto}
-👤 @${o.telegram_username || 'unknown'}
-📝 ${o.customer_note || 'No note'}
-📅 ${date}
-🔑 ID: \`${o.id}\``;
-  }).join('\n\n');
-
-  bot.sendMessage(msg.chat.id, `⏳ *Pending Orders:*\n\n${text}`, {
-    parse_mode: 'Markdown'
-  });
+  const { data } = await db.from('orders')
+    .select('*').eq('status', 'pending').order('created_at', { ascending: false });
+  if (!data?.length) { bot.sendMessage(msg.chat.id, '✅ No pending orders!'); return; }
+  const text = data.map((o, i) =>
+    `#${i+1} — ${o.product_name}\n💰 $${o.price_usd} | 👤 @${o.telegram_username||'unknown'}\n📅 ${new Date(o.created_at).toLocaleString()}\n🔑 \`${o.id}\``
+  ).join('\n\n');
+  bot.sendMessage(msg.chat.id, `⏳ *Pending Orders:*\n\n${text}\n\nTo confirm: /confirmorder <id>`, { parse_mode: 'Markdown' });
 });
 
-// ─── /confirm command (you only) ──────────────────────────
-bot.onText(/\/confirm (.+)/, async (msg, match) => {
+// ── /confirmorder <id> ────────────────────────
+bot.onText(/\/confirmorder (.+)/, async (msg, match) => {
   if (String(msg.chat.id) !== String(OWNER_ID)) return;
-
   const orderId = match[1].trim();
-  const { error } = await db
-    .from('orders')
-    .update({ status: 'confirmed' })
-    .eq('id', orderId);
-
-  if (error) {
-    bot.sendMessage(msg.chat.id, '❌ Could not update order. Check the ID.');
-    return;
+  const { data: order, error } = await db.from('orders').select('*').eq('id', orderId).single();
+  if (error || !order) { bot.sendMessage(msg.chat.id, '❌ Order not found.'); return; }
+  await db.from('orders').update({ status: 'confirmed' }).eq('id', orderId);
+  bot.sendMessage(msg.chat.id, `✅ Order confirmed!\n📦 ${order.product_name}\n👤 @${order.telegram_username||'unknown'}`, { parse_mode: 'Markdown' });
+  if (order.telegram_user_id) {
+    bot.sendMessage(order.telegram_user_id,
+      `✅ *Your order has been confirmed!*\n\n📦 ${order.product_name}\n💰 $${order.price_usd}\n\nThank you for shopping with bakery! 🍃`,
+      { parse_mode: 'Markdown' });
   }
-
-  bot.sendMessage(msg.chat.id, `✅ Order \`${orderId}\` marked as confirmed!`, {
-    parse_mode: 'Markdown'
-  });
 });
 
-// ─── New order notification listener ──────────────────────
-async function watchNewOrders() {
-  const channel = db
-    .channel('new-orders')
-    .on(
-      'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'orders' },
-      async (payload) => {
-        const o = payload.new;
-        const date = new Date(o.created_at).toLocaleString();
+// ── /deposits ─────────────────────────────────
+bot.onText(/\/deposits/, async (msg) => {
+  console.log('deposits from:', msg.chat.id, 'owner:', OWNER_ID);
+  if (String(msg.chat.id) !== String(OWNER_ID)) return;
+  const { data } = await db.from('deposits')
+    .select('*').eq('status', 'pending').order('created_at', { ascending: false });
+  if (!data?.length) { bot.sendMessage(msg.chat.id, '✅ No pending deposits!'); return; }
+  const text = data.map((d, i) =>
+    `#${i+1} — ${d.crypto} — $${d.amount_usd}\n👤 User ID: ${d.telegram_user_id}\n📅 ${new Date(d.created_at).toLocaleString()}\n🔑 \`${d.id}\``
+  ).join('\n\n');
+  bot.sendMessage(msg.chat.id, `💰 *Pending Deposits:*\n\n${text}\n\nTo confirm: /confirmdeposit <id>`, { parse_mode: 'Markdown' });
+});
 
-        const message =
-`🛒 *New Order!*
+// ── /confirmdeposit <id> ──────────────────────
+bot.onText(/\/confirmdeposit (.+)/, async (msg, match) => {
+  if (String(msg.chat.id) !== String(OWNER_ID)) return;
+  const depositId = match[1].trim();
+  const { data: deposit, error } = await db.from('deposits').select('*').eq('id', depositId).single();
+  if (error || !deposit) { bot.sendMessage(msg.chat.id, '❌ Deposit not found.'); return; }
+  if (deposit.status === 'confirmed') { bot.sendMessage(msg.chat.id, '⚠️ Already confirmed.'); return; }
+  await db.from('deposits').update({ status: 'confirmed' }).eq('id', depositId);
+  const { data: profile } = await db.from('user_profiles')
+    .select('balance_usd').eq('telegram_user_id', deposit.telegram_user_id).single();
+  const newBalance = parseFloat(profile?.balance_usd || 0) + parseFloat(deposit.amount_usd);
+  await db.from('user_profiles').update({ balance_usd: newBalance })
+    .eq('telegram_user_id', deposit.telegram_user_id);
+  bot.sendMessage(msg.chat.id,
+    `✅ Deposit confirmed!\n💰 $${deposit.amount_usd} added\n📊 New balance: $${newBalance.toFixed(2)}`,
+    { parse_mode: 'Markdown' });
+  bot.sendMessage(deposit.telegram_user_id,
+    `✅ *Deposit confirmed!*\n\n💰 $${deposit.amount_usd} added to your wallet\n📊 New balance: $${newBalance.toFixed(2)}\n\nYou can now shop! 🍃`,
+    { parse_mode: 'Markdown' });
+});
 
-📦 *Product:* ${o.product_name}
-💰 *Amount:* $${o.price_usd} in ${o.crypto}
-👤 *Customer:* @${o.telegram_username || 'unknown'}
-📝 *Note:* ${o.customer_note || 'None'}
-📅 *Time:* ${date}
-🔑 *Order ID:* \`${o.id}\`
+// ── Realtime listeners ────────────────────────
+db.channel('new-orders')
+  .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, (payload) => {
+    const o = payload.new;
+    bot.sendMessage(OWNER_ID,
+`🛒 *New Order!*\n📦 ${o.product_name}\n💰 $${o.price_usd}\n👤 @${o.telegram_username||'unknown'}\n📅 ${new Date(o.created_at).toLocaleString()}\n🔑 \`${o.id}\`\n\nTo confirm: /confirmorder ${o.id}`,
+      { parse_mode: 'Markdown' });
+  }).subscribe();
 
-To confirm: /confirm ${o.id}`;
+db.channel('new-deposits')
+  .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'deposits' }, (payload) => {
+    const d = payload.new;
+    bot.sendMessage(OWNER_ID,
+`💰 *New Deposit!*\n💎 ${d.crypto} — $${d.amount_usd}\n👤 User ID: ${d.telegram_user_id}\n📅 ${new Date(d.created_at).toLocaleString()}\n🔑 \`${d.id}\`\n\nTo confirm: /confirmdeposit ${d.id}`,
+      { parse_mode: 'Markdown' });
+  }).subscribe();
 
-        bot.sendMessage(OWNER_ID, message, { parse_mode: 'Markdown' });
-      }
-    )
-    .subscribe();
-}
-
-watchNewOrders();
-console.log('Bot is running...');
+console.log('Bakery bot running... 🍃');
