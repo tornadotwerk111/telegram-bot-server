@@ -157,7 +157,7 @@ bot.onText(/\/deliverorder (.+)/, async (msg, match) => {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [[
-            { text: '⭐ Leave a Review', url: `https://t.me/thebakersbot?startapp=review_${orderId}` }
+            { text: '⭐ Leave a Review', url: `https://t.me/thebakersbot/lol?startapp=review_${orderId}` }
           ]]
         }
       }
