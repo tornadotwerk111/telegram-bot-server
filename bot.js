@@ -152,8 +152,15 @@ bot.onText(/\/deliverorder (.+)/, async (msg, match) => {
       `✅ *Your order has been delivered!*\n\n` +
       `📦 ${order.product_name}\n💰 $${order.price_usd}\n\n` +
       `Enjoy! Thank you for shopping with bakery 🍃\n` +
-      `Open the shop to leave a review ⭐`,
-      { parse_mode: 'Markdown' }
+      `Tap below to leave a review ⭐`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '⭐ Leave a Review', web_app: { url: APP_URL } }
+          ]]
+        }
+      }
     );
   }
 });
