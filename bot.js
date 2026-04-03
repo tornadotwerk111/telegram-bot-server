@@ -56,24 +56,24 @@ bot.onText(/\/pending/, async (msg) => {
     `📅 ${new Date(o.created_at).toLocaleString()}\n` +
     `🔑 \`${o.id}\``
   ).join('\n\n');
-  bot.sendMessage(msg.chat.id, `⏳ *Pending Orders:*\n\n${text}\n\nTo confirm: /confirmorder <id>`, { parse_mode: 'Markdown' });
+  bot.sendMessage(msg.chat.id, `⏳ *Pending Orders:*\n\n${text}\n\nConfirm: /confirmorder <id>\nShip: /shiporder <id>\nDeliver: /deliverorder <id>`, { parse_mode: 'Markdown' });
 });
 
 // ── /confirmorder <id> ────────────────────────
-// Marks order confirmed, updates user's total_spent on their profile,
-// and sends the user a confirmation notification.
+// Marks order as 'ordered', updates total_spent, notifies customer.
 bot.onText(/\/confirmorder (.+)/, async (msg, match) => {
   if (String(msg.chat.id) !== String(OWNER_ID)) return;
   const orderId = match[1].trim();
 
   const { data: order, error } = await db.from('orders').select('*').eq('id', orderId).single();
   if (error || !order) { bot.sendMessage(msg.chat.id, '❌ Order not found.'); return; }
-  if (order.status === 'confirmed') { bot.sendMessage(msg.chat.id, '⚠️ Already confirmed.'); return; }
+  if (order.status !== 'pending' && order.status !== 'confirmed') {
+    bot.sendMessage(msg.chat.id, `⚠️ Order is already: ${order.status}`); return;
+  }
 
-  // Mark order confirmed
-  await db.from('orders').update({ status: 'confirmed' }).eq('id', orderId);
+  await db.from('orders').update({ status: 'ordered' }).eq('id', orderId);
 
-  // Update user's total_spent on their profile
+  // Update user's total_spent
   const { data: profile } = await db.from('user_profiles')
     .select('total_spent').eq('telegram_user_id', order.telegram_user_id).single();
   const newTotalSpent = parseFloat(profile?.total_spent || 0) + parseFloat(order.price_usd);
@@ -81,24 +81,78 @@ bot.onText(/\/confirmorder (.+)/, async (msg, match) => {
     .update({ total_spent: newTotalSpent })
     .eq('telegram_user_id', order.telegram_user_id);
 
-  // Notify owner
   bot.sendMessage(msg.chat.id,
-    `✅ *Order confirmed!*\n\n` +
-    `📦 ${order.product_name}\n` +
-    `💰 $${order.price_usd}\n` +
+    `✅ *Order confirmed — status: Ordered*\n\n` +
+    `📦 ${order.product_name}\n💰 $${order.price_usd}\n` +
     `👤 @${order.telegram_username||'unknown'}\n` +
     `🏠 ${order.shipping_name||'—'} — ${order.shipping_address||'—'}`,
     { parse_mode: 'Markdown' }
   );
 
-  // Notify customer
   if (order.telegram_user_id) {
     bot.sendMessage(order.telegram_user_id,
       `✅ *Your order has been confirmed!*\n\n` +
-      `📦 ${order.product_name}\n` +
-      `💰 $${order.price_usd}\n` +
+      `📦 ${order.product_name}\n💰 $${order.price_usd}\n` +
       `🏠 Shipping to: ${order.shipping_name||'—'}\n${order.shipping_address||'—'}\n\n` +
-      `Thank you for shopping with bakery! 🍃`,
+      `We'll notify you when it ships! 🍃`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+});
+
+// ── /shiporder <id> ───────────────────────────
+bot.onText(/\/shiporder (.+)/, async (msg, match) => {
+  if (String(msg.chat.id) !== String(OWNER_ID)) return;
+  const orderId = match[1].trim();
+
+  const { data: order, error } = await db.from('orders').select('*').eq('id', orderId).single();
+  if (error || !order) { bot.sendMessage(msg.chat.id, '❌ Order not found.'); return; }
+  if (order.status === 'shipped' || order.status === 'delivered') {
+    bot.sendMessage(msg.chat.id, `⚠️ Order is already: ${order.status}`); return;
+  }
+
+  await db.from('orders').update({ status: 'shipped' }).eq('id', orderId);
+
+  bot.sendMessage(msg.chat.id,
+    `📬 *Order marked as Shipped!*\n\n📦 ${order.product_name}\n👤 @${order.telegram_username||'unknown'}`,
+    { parse_mode: 'Markdown' }
+  );
+
+  if (order.telegram_user_id) {
+    bot.sendMessage(order.telegram_user_id,
+      `📬 *Your order has shipped!*\n\n` +
+      `📦 ${order.product_name}\n💰 $${order.price_usd}\n` +
+      `🏠 ${order.shipping_name||'—'}\n${order.shipping_address||'—'}\n\n` +
+      `It's on its way! 🍃`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+});
+
+// ── /deliverorder <id> ────────────────────────
+bot.onText(/\/deliverorder (.+)/, async (msg, match) => {
+  if (String(msg.chat.id) !== String(OWNER_ID)) return;
+  const orderId = match[1].trim();
+
+  const { data: order, error } = await db.from('orders').select('*').eq('id', orderId).single();
+  if (error || !order) { bot.sendMessage(msg.chat.id, '❌ Order not found.'); return; }
+  if (order.status === 'delivered') {
+    bot.sendMessage(msg.chat.id, '⚠️ Already marked as delivered.'); return;
+  }
+
+  await db.from('orders').update({ status: 'delivered' }).eq('id', orderId);
+
+  bot.sendMessage(msg.chat.id,
+    `✅ *Order marked as Delivered!*\n\n📦 ${order.product_name}\n👤 @${order.telegram_username||'unknown'}`,
+    { parse_mode: 'Markdown' }
+  );
+
+  if (order.telegram_user_id) {
+    bot.sendMessage(order.telegram_user_id,
+      `✅ *Your order has been delivered!*\n\n` +
+      `📦 ${order.product_name}\n💰 $${order.price_usd}\n\n` +
+      `Enjoy! Thank you for shopping with bakery 🍃\n` +
+      `Open the shop to leave a review ⭐`,
       { parse_mode: 'Markdown' }
     );
   }
