@@ -35,7 +35,10 @@ bot.onText(/\/orders/, async (msg) => {
     .select('*').order('created_at', { ascending: false }).limit(10);
   if (error || !data?.length) { bot.sendMessage(msg.chat.id, '📭 No orders yet.'); return; }
   const text = data.map((o, i) =>
-    `#${i+1} — ${o.product_name}\n💰 $${o.price_usd} | 👤 @${o.telegram_username||'unknown'}\n🔖 ${o.status} | 📅 ${new Date(o.created_at).toLocaleString()}`
+    `#${i+1} — ${o.product_name}\n` +
+    `💰 $${o.price_usd} | 👤 @${o.telegram_username||'unknown'}\n` +
+    `📦 ${o.shipping_name||'—'} | ${o.shipping_address||'—'}\n` +
+    `🔖 ${o.status} | 📅 ${new Date(o.created_at).toLocaleString()}`
   ).join('\n\n');
   bot.sendMessage(msg.chat.id, `🧾 *Last 10 Orders:*\n\n${text}`, { parse_mode: 'Markdown' });
 });
@@ -47,23 +50,57 @@ bot.onText(/\/pending/, async (msg) => {
     .select('*').eq('status', 'pending').order('created_at', { ascending: false });
   if (!data?.length) { bot.sendMessage(msg.chat.id, '✅ No pending orders!'); return; }
   const text = data.map((o, i) =>
-    `#${i+1} — ${o.product_name}\n💰 $${o.price_usd} | 👤 @${o.telegram_username||'unknown'}\n📅 ${new Date(o.created_at).toLocaleString()}\n🔑 \`${o.id}\``
+    `#${i+1} — ${o.product_name}\n` +
+    `💰 $${o.price_usd} | 👤 @${o.telegram_username||'unknown'}\n` +
+    `📦 ${o.shipping_name||'—'}\n${o.shipping_address||'—'}\n` +
+    `📅 ${new Date(o.created_at).toLocaleString()}\n` +
+    `🔑 \`${o.id}\``
   ).join('\n\n');
   bot.sendMessage(msg.chat.id, `⏳ *Pending Orders:*\n\n${text}\n\nTo confirm: /confirmorder <id>`, { parse_mode: 'Markdown' });
 });
 
 // ── /confirmorder <id> ────────────────────────
+// Marks order confirmed, updates user's total_spent on their profile,
+// and sends the user a confirmation notification.
 bot.onText(/\/confirmorder (.+)/, async (msg, match) => {
   if (String(msg.chat.id) !== String(OWNER_ID)) return;
   const orderId = match[1].trim();
+
   const { data: order, error } = await db.from('orders').select('*').eq('id', orderId).single();
   if (error || !order) { bot.sendMessage(msg.chat.id, '❌ Order not found.'); return; }
+  if (order.status === 'confirmed') { bot.sendMessage(msg.chat.id, '⚠️ Already confirmed.'); return; }
+
+  // Mark order confirmed
   await db.from('orders').update({ status: 'confirmed' }).eq('id', orderId);
-  bot.sendMessage(msg.chat.id, `✅ Order confirmed!\n📦 ${order.product_name}\n👤 @${order.telegram_username||'unknown'}`, { parse_mode: 'Markdown' });
+
+  // Update user's total_spent on their profile
+  const { data: profile } = await db.from('user_profiles')
+    .select('total_spent').eq('telegram_user_id', order.telegram_user_id).single();
+  const newTotalSpent = parseFloat(profile?.total_spent || 0) + parseFloat(order.price_usd);
+  await db.from('user_profiles')
+    .update({ total_spent: newTotalSpent })
+    .eq('telegram_user_id', order.telegram_user_id);
+
+  // Notify owner
+  bot.sendMessage(msg.chat.id,
+    `✅ *Order confirmed!*\n\n` +
+    `📦 ${order.product_name}\n` +
+    `💰 $${order.price_usd}\n` +
+    `👤 @${order.telegram_username||'unknown'}\n` +
+    `🏠 ${order.shipping_name||'—'} — ${order.shipping_address||'—'}`,
+    { parse_mode: 'Markdown' }
+  );
+
+  // Notify customer
   if (order.telegram_user_id) {
     bot.sendMessage(order.telegram_user_id,
-      `✅ *Your order has been confirmed!*\n\n📦 ${order.product_name}\n💰 $${order.price_usd}\n\nThank you for shopping with bakery! 🍃`,
-      { parse_mode: 'Markdown' });
+      `✅ *Your order has been confirmed!*\n\n` +
+      `📦 ${order.product_name}\n` +
+      `💰 $${order.price_usd}\n` +
+      `🏠 Shipping to: ${order.shipping_name||'—'}\n${order.shipping_address||'—'}\n\n` +
+      `Thank you for shopping with bakery! 🍃`,
+      { parse_mode: 'Markdown' }
+    );
   }
 });
 
@@ -106,7 +143,14 @@ db.channel('new-orders')
   .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, (payload) => {
     const o = payload.new;
     bot.sendMessage(OWNER_ID,
-`🛒 *New Order!*\n📦 ${o.product_name}\n💰 $${o.price_usd}\n👤 @${o.telegram_username||'unknown'}\n📅 ${new Date(o.created_at).toLocaleString()}\n🔑 \`${o.id}\`\n\nTo confirm: /confirmorder ${o.id}`,
+`🛒 *New Order!*\n` +
+`📦 ${o.product_name}\n` +
+`💰 $${o.price_usd}\n` +
+`👤 @${o.telegram_username||'unknown'}\n` +
+`🏠 ${o.shipping_name||'—'}\n${o.shipping_address||'—'}\n` +
+`📅 ${new Date(o.created_at).toLocaleString()}\n` +
+`🔑 \`${o.id}\`\n\n` +
+`To confirm: /confirmorder ${o.id}`,
       { parse_mode: 'Markdown' });
   }).subscribe();
 
