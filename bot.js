@@ -7,7 +7,20 @@ const OWNER_ID    = process.env.OWNER_TELEGRAM_ID;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
-const bot = new TelegramBot(TOKEN, { polling: true });
+const bot = new TelegramBot(TOKEN, {
+  polling: {
+    autoStart: true,
+    params: { timeout: 10 }
+  }
+});
+
+bot.on('polling_error', (err) => {
+  console.error('Polling error:', err.message);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+});
 const db  = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ─── /start command ───────────────────────────────────────
