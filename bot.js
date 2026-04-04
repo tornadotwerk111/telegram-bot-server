@@ -100,34 +100,85 @@ bot.onText(/\/confirmorder (.+)/, async (msg, match) => {
   }
 });
 
-// ── /shiporder <id> ───────────────────────────
-bot.onText(/\/shiporder (.+)/, async (msg, match) => {
+// ── /shiporder <id> <carrier> <tracking> ─────
+// Usage: /shiporder <orderId> USPS 9400111899223397623910
+// Or just: /shiporder <orderId>   (will prompt for tracking info)
+const pendingShipments = {}; // store orderId while waiting for tracking info
+
+bot.onText(/\/shiporder (\S+)\s+(\S+)\s+(.+)/, async (msg, match) => {
   if (String(msg.chat.id) !== String(OWNER_ID)) return;
   const orderId = match[1].trim();
+  const carrier = match[2].trim();
+  const tracking = match[3].trim();
+  await processShipOrder(msg.chat.id, orderId, carrier, tracking);
+});
 
+bot.onText(/\/shiporder (\S+)$/, async (msg, match) => {
+  if (String(msg.chat.id) !== String(OWNER_ID)) return;
+  const orderId = match[1].trim();
   const { data: order, error } = await db.from('orders').select('*').eq('id', orderId).single();
   if (error || !order) { bot.sendMessage(msg.chat.id, '❌ Order not found.'); return; }
   if (order.status === 'shipped' || order.status === 'delivered') {
     bot.sendMessage(msg.chat.id, `⚠️ Order is already: ${order.status}`); return;
   }
-
-  await db.from('orders').update({ status: 'shipped' }).eq('id', orderId);
-
+  // Prompt for tracking info
+  pendingShipments[msg.chat.id] = orderId;
   bot.sendMessage(msg.chat.id,
-    `📬 *Order marked as Shipped!*\n\n📦 ${order.product_name}\n👤 @${order.telegram_username||'unknown'}`,
+    `📬 Order found: *${order.product_name}*\n\nReply with tracking info in this format:\n\`CARRIER TRACKINGNUMBER\`\n\nExample:\n\`USPS 9400111899223397623910\`\n\nOr type \`skip\` to ship without tracking.`,
+    { parse_mode: 'Markdown' }
+  );
+});
+
+// Listen for tracking info reply
+bot.on('message', async (msg) => {
+  if (String(msg.chat.id) !== String(OWNER_ID)) return;
+  if (!pendingShipments[msg.chat.id]) return;
+  if (msg.text?.startsWith('/')) return; // ignore commands
+  const orderId = pendingShipments[msg.chat.id];
+  delete pendingShipments[msg.chat.id];
+  const text = msg.text?.trim() || '';
+  if (text.toLowerCase() === 'skip') {
+    await processShipOrder(msg.chat.id, orderId, null, null);
+  } else {
+    const parts = text.split(/\s+/);
+    const carrier = parts[0] || null;
+    const tracking = parts.slice(1).join(' ') || null;
+    await processShipOrder(msg.chat.id, orderId, carrier, tracking);
+  }
+});
+
+async function processShipOrder(chatId, orderId, carrier, tracking) {
+  const { data: order, error } = await db.from('orders').select('*').eq('id', orderId).single();
+  if (error || !order) { bot.sendMessage(chatId, '❌ Order not found.'); return; }
+  if (order.status === 'shipped' || order.status === 'delivered') {
+    bot.sendMessage(chatId, `⚠️ Order is already: ${order.status}`); return;
+  }
+
+  await db.from('orders').update({
+    status: 'shipped',
+    tracking_carrier: carrier || null,
+    tracking_number: tracking || null
+  }).eq('id', orderId);
+
+  const trackingLine = tracking
+    ? `\n📮 *${carrier||'Carrier'}:* \`${tracking}\``
+    : '';
+
+  bot.sendMessage(chatId,
+    `📬 *Order marked as Shipped!*\n\n📦 ${order.product_name}\n👤 @${order.telegram_username||'unknown'}${trackingLine}`,
     { parse_mode: 'Markdown' }
   );
 
   if (order.telegram_user_id) {
     bot.sendMessage(order.telegram_user_id,
       `📬 *Your order has shipped!*\n\n` +
-      `📦 ${order.product_name}\n💰 $${order.price_usd}\n` +
-      `🏠 ${order.shipping_name||'—'}\n${order.shipping_address||'—'}\n\n` +
-      `It's on its way! 🍃`,
+      `📦 ${order.product_name}\n💰 $${order.price_usd}` +
+      (tracking ? `\n\n📮 *Tracking*\n${carrier||'Carrier'}: \`${tracking}\`` : '') +
+      `\n\nIt's on its way! 🍃`,
       { parse_mode: 'Markdown' }
     );
   }
-});
+}
 
 // ── /deliverorder <id> ────────────────────────
 bot.onText(/\/deliverorder (.+)/, async (msg, match) => {
