@@ -229,7 +229,31 @@ bot.onText(/\/deposits/, async (msg) => {
   bot.sendMessage(msg.chat.id, `💰 *Pending Deposits:*\n\n${text}\n\nTo confirm: /confirmdeposit <id>`, { parse_mode: 'Markdown' });
 });
 
-// ── /confirmdeposit <id> ──────────────────────
+// ── /denydeposit <id> ────────────────────────
+bot.onText(/\/denydeposit (.+)/, async (msg, match) => {
+  if (String(msg.chat.id) !== String(OWNER_ID)) return;
+  const depositId = match[1].trim();
+
+  const { data: deposit, error } = await db.from('deposits').select('*').eq('id', depositId).single();
+  if (error || !deposit) { bot.sendMessage(msg.chat.id, '❌ Deposit not found.'); return; }
+  if (deposit.status === 'confirmed') { bot.sendMessage(msg.chat.id, '⚠️ Already confirmed — cannot deny.'); return; }
+  if (deposit.status === 'denied') { bot.sendMessage(msg.chat.id, '⚠️ Already denied.'); return; }
+
+  await db.from('deposits').update({ status: 'denied' }).eq('id', depositId);
+
+  bot.sendMessage(msg.chat.id,
+    `🚫 *Deposit denied.*\n\n💎 ${deposit.crypto} — $${deposit.amount_usd}\n👤 User ID: ${deposit.telegram_user_id}`,
+    { parse_mode: 'Markdown' }
+  );
+
+  bot.sendMessage(deposit.telegram_user_id,
+    `⚠️ *Deposit Not Verified*\n\n` +
+    `Your deposit of $${deposit.amount_usd} (${deposit.crypto}) could not be verified.\n\n` +
+    `Please note: submitting false or unverifiable deposits may result in your access being restricted or permanently removed.\n\n` +
+    `If you believe this is a mistake or need assistance, please contact @thebaker9.`,
+    { parse_mode: 'Markdown' }
+  );
+});
 bot.onText(/\/confirmdeposit (.+)/, async (msg, match) => {
   if (String(msg.chat.id) !== String(OWNER_ID)) return;
   const depositId = match[1].trim();
