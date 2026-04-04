@@ -18,10 +18,10 @@ const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 // ── /start ────────────────────────────────────
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(msg.chat.id,
-    `👋 Hey ${msg.from.first_name}! Tap below to open the shop.`, {
+    `hello ${msg.from.first_name}. tap below to open the shop.`, {
     reply_markup: {
       inline_keyboard: [[
-        { text: '🛍️ Open Shop', web_app: { url: APP_URL } }
+        { text: 'open shop', web_app: { url: APP_URL } }
       ]]
     }
   });
