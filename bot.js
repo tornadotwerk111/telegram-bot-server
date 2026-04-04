@@ -219,7 +219,7 @@ db.channel('new-deposits')
   .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'deposits' }, (payload) => {
     const d = payload.new;
     bot.sendMessage(OWNER_ID,
-`💰 *New Deposit!*\n💎 ${d.crypto} — $${d.amount_usd}\n👤 User ID: ${d.telegram_user_id}\n📅 ${new Date(d.created_at).toLocaleString()}\n🔑 \`${d.id}\`\n\nTo confirm: /confirmdeposit ${d.id}`,
+`💰 *New Deposit!*\n💎 ${d.crypto} — $${d.amount_usd}\n👤 User ID: ${d.telegram_user_id}\n🔗 TX: \`${d.txid||'not provided'}\`\n📅 ${new Date(d.created_at).toLocaleString()}\n🔑 \`${d.id}\`\n\nTo confirm: /confirmdeposit ${d.id}`,
       { parse_mode: 'Markdown' });
   }).subscribe();
 
